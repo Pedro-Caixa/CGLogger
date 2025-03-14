@@ -23,9 +23,9 @@ def rgb_to_hex(red, green, blue):
     return f"#{r:02x}{g:02x}{b:02x}"
 
 def get_background_color(sheetName, cell_range):
+    """Get the background color of a cell in hex format."""
     try:
         spreadsheet_id = sheets[sheetName]
-        
         sheet_metadata = service.spreadsheets().get(
             spreadsheetId=spreadsheet_id,
             ranges=[cell_range],
@@ -45,43 +45,50 @@ def get_background_color(sheetName, cell_range):
         return None
 
 def get_row_by_username(sheetName, username):
+    """Find the row containing the username."""
     try:
         spreadsheet = client.open_by_key(sheets[sheetName])
-        
         worksheet = spreadsheet.worksheet("Main Sheet")
-        
         all_values = worksheet.get_all_values()
         
         for row_index, row in enumerate(all_values):
             if username in row:
-                col_index = row.index(username)
-                
-                return row_index + 1, col_index + 1, [cell for cell in row if cell.strip()]
-        
+                return row_index + 1
         print(f"Username '{username}' not found in sheet '{sheetName}'.")
-        return None, None, None
+        return None
     
     except Exception as e:
         print(f"An error occurred: {e}")
-        return None, None, None
-
-def get_username_info(sheetName, username):
-    row_index, col_index, filtered_row = get_row_by_username(sheetName, username)
-    
-    if row_index is None or col_index is None:
         return None
-    
-    cell_range = f"Main Sheet!{gspread.utils.rowcol_to_a1(row_index, col_index)}"
-    bg_color = get_background_color(sheetName, cell_range)
-    
-    return {
-        "row_data": filtered_row,
-        "background_color": bg_color
-    }
 
-username_info = get_username_info("Main", "Bunny112071")
-if username_info:
-    print("Row Data:", username_info["row_data"])
-    print("Background Color (Hex):", username_info["background_color"])
-else:
-    print("Username not found or an error occurred.")
+def get_cell_color(sheetName, username, column_identifier):
+    """
+    Get the background color of a cell in the username's row.
+    - `column_identifier`: Column name (e.g., "May") or 1-based index (e.g., 5).
+    """
+    try:
+        row_index = get_row_by_username(sheetName, username)
+        if not row_index:
+            return None
+        
+        spreadsheet = client.open_by_key(sheets[sheetName])
+        worksheet = spreadsheet.worksheet("Main Sheet")
+        
+        if isinstance(column_identifier, str):
+            headers = worksheet.row_values(1)
+            try:
+                col_index = headers.index(column_identifier) + 1
+            except ValueError:
+                print(f"Column '{column_identifier}' not found.")
+                return None
+        else:
+            col_index = column_identifier
+        
+        cell_ref = gspread.utils.rowcol_to_a1(row_index, col_index)
+        cell_range = f"Main Sheet!{cell_ref}"
+        
+        return get_background_color(sheetName, cell_range)
+    
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None

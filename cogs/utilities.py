@@ -20,10 +20,7 @@ class Utilities(commands.Cog):
             title="Pong!",
             description=f"Bot latency is {latency}ms"
         )
-        get_row_by_username("Main", "Bunny112071")
         await interaction.response.send_message(embed=embed)
-
- 
 
 async def setup(bot):
     await bot.add_cog(Utilities(bot))
