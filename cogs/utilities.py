@@ -22,6 +22,30 @@ class Utilities(commands.Cog):
         )
         await interaction.response.send_message(embed=embed)
 
+import discord
+from discord.ext import commands
+from discord import app_commands
+from config import GUILD_ID
+from utils.embed_utils import make_embed
+from utils.sheets import get_row_by_username, get_cell_color
+from utils.log_utils import log_command
+
+class Utilities(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @app_commands.command(name="ping", description="Check the bot's latency")
+    @app_commands.guilds(discord.Object(id=GUILD_ID))
+    async def ping(self, interaction: discord.Interaction):
+        """Returns the bot's latency."""
+        latency = round(self.bot.latency * 1000)
+        embed = make_embed(
+            type="Success",
+            title="Pong!",
+            description=f"Bot latency is {latency}ms"
+        )
+        await interaction.response.send_message(embed=embed)
+
     @app_commands.command(name="quota", description="Check user's quota status based on row colors")
     @app_commands.guilds(discord.Object(id=GUILD_ID))
     async def quota(self, interaction: discord.Interaction, username: str):
@@ -37,7 +61,7 @@ class Utilities(commands.Cog):
                 await interaction.response.send_message(embed=embed)
                 return
 
-            user_row_color = get_cell_color("Main", username, 4)
+            user_row_color = get_cell_color("Main", username, 1)
             if user_row_color == "#351c75":
                 embed = make_embed(
                     type="Success",
@@ -51,7 +75,7 @@ class Utilities(commands.Cog):
             row_6_color = get_cell_color("Main", username, 6)
             row_7_color = get_cell_color("Main", username, 7)
 
-            if row_5_color == "#e06666" or row_6_color == "#e06666" or row_7_color == "#e06666":
+            if row_5_color == "#ff0000" or row_6_color == "#ff0000" or row_7_color == "#ff0000":
                 embed = make_embed(
                     type="Error",
                     title="Quota Status",
@@ -85,3 +109,4 @@ class Utilities(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Utilities(bot))
+
