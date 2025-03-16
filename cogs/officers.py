@@ -1,3 +1,4 @@
+import os
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -5,6 +6,9 @@ import re
 from config import GUILD_ID, OFFICER_ROLES
 from utils.embed_utils import make_embed
 from utils.log_utils import log_command
+from dotenv import load_dotenv
+
+EVENT_LOG_WEBHOOK = os.getenv('DISCORD_TOKEN')
 
 class Officers(commands.Cog):
     def __init__(self, bot):
@@ -33,6 +37,9 @@ class Officers(commands.Cog):
             replied_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
             content = replied_message.content
             
+            if not replied_message.attachments:
+                raise commands.CommandError("Proof image is required - attach at least one image to the message")
+            
             required_fields = [
                 "Event:", "Hosted by:", "Attendees:", 
                 "Proof:", "EP for event:"
@@ -50,21 +57,18 @@ class Officers(commands.Cog):
             host_match = re.search(r"Hosted by:\s*(.+)", content)
             if not host_match:
                 raise commands.CommandError("Missing or invalid host information")
-            host_parts = [p.strip() for p in host_match.group(1).split("|")]
-
-            host_mention = re.search(r"<@!(\d+)>", host_parts[0])
+            
+            host_content = host_match.group(1)
+            host_mention = re.search(r"<@!?(\d+)>", host_content)
+            
             if host_mention:
                 user_id = int(host_mention.group(1))
                 member = await ctx.guild.fetch_member(user_id)
-                host_nickname = member.nick if member.nick else member.name 
+                host_name = member.nick or member.name
             else:
-                host_nickname = host_parts[0]
+                host_parts = [p.strip() for p in host_content.split("|")]
+                host_name = host_parts[1] if len(host_parts) > 1 else host_content
 
-            attendees_match = re.search(r"Attendees:\s*([<@!>\d]+)", content)
-            if not attendees_match:
-                raise commands.CommandError("Missing attendees list")
-            
-            raw_attendees = []
             attendees_match = re.search(r"Attendees:\s*(.*)", content)
             if not attendees_match:
                 raise commands.CommandError("Missing attendees list")
@@ -78,8 +82,7 @@ class Officers(commands.Cog):
             raw_attendees = []
             for attendee_id in attendee_mentions:
                 member = await ctx.guild.fetch_member(int(attendee_id))
-                attendee_nickname = member.nick if member.nick else member.name
-
+                attendee_nickname = member.nick or member.name
                 nickname_parts = [part.strip() for part in attendee_nickname.split("|")]
                 attendee_name = nickname_parts[1] if len(nickname_parts) > 1 else attendee_nickname
                 raw_attendees.append(attendee_name)
@@ -93,15 +96,44 @@ class Officers(commands.Cog):
                 type="Success",
                 title="Event Logged!",
                 description=(
-                    f"**Host:** {host_nickname}\n"
+                    f"**Host:** {host_name}\n"
                     f"**EP Value:** {ep_value}\n"
                     f"**Attendees ({len(raw_attendees)}):**\n{attendee_list}\n"
                     f"**Linked Message:** [Jump to Message]({replied_message.jump_url})\n"
                     f"**Logged by:** {ctx.author.name}"
                 )
             )
-            
             await ctx.send(embed=embed)
+
+            webhook = discord.Webhook.from_url(EVENT_LOG_WEBHOOK, session=self.bot.session)
+            files = []
+            
+            for attachment in replied_message.attachments:
+                if attachment.content_type.startswith('image/'):
+                    files.append(await attachment.to_file())
+            
+            archive_embed = make_embed(
+                type="Info",
+                title=f"Event Archive: {re.search(r'Event:\s*(.*)', content).group(1)}",
+                description=(
+                    f"**Host:** {host_name}\n"
+                    f"**EP Awarded:** {ep_value}\n"
+                    f"**Attendees:** {len(raw_attendees)} members\n"
+                    f"**Logged by:** {ctx.author.mention}\n"
+                    f"[Original Message]({replied_message.jump_url})"
+                )
+            )
+            archive_embed.set_footer(text=f"Event ID: {replied_message.id}")
+            
+            if files:
+                archive_embed.set_image(url="attachment://" + files[0].filename)
+
+            await webhook.send(
+                embed=archive_embed,
+                files=files,
+                username="Event Logger",
+                avatar_url=self.bot.user.display_avatar.url
+            )
             
             await log_command(
                 bot=self.bot,
@@ -109,14 +141,13 @@ class Officers(commands.Cog):
                 user=ctx.author,
                 guild=ctx.guild,
                 Parameters=(
-                    f"EP: {ep_value} | Host: {host_nickname} | "
+                    f"EP: {ep_value} | Host: {host_name} | "
                     f"Attendees: {len(raw_attendees)} | Message: {replied_message.id}"
                 ),
                 EP_Value=ep_value,
-                Host=host_nickname,
+                Host=host_name,
                 Attendees=len(raw_attendees)
             )
-
         except Exception as e:
             embed = make_embed(
                 type="Error",
@@ -131,43 +162,6 @@ class Officers(commands.Cog):
                             "Ping: @EventManager```"
             )
             await ctx.send(embed=embed)
-
-    @commands.Cog.listener()
-    async def on_command_error(self, ctx, error):
-        if isinstance(error, commands.MissingAnyRole):
-            role_mentions = [f"<@&{rid}>" for rid in OFFICER_ROLES if ctx.guild.get_role(rid)]
-            embed = make_embed(
-                type="Error",
-                title="Permission Denied",
-                description=f"Requires roles: {', '.join(role_mentions)}"
-            )
-            await ctx.send(embed=embed, delete_after=10)
-        elif isinstance(error, commands.CommandError):
-            embed = make_embed(
-                type="Error",
-                title="Format Error",
-                description=str(error)
-            )
-            await ctx.send(embed=embed, delete_after=15)
-
-    @commands.Cog.listener()
-    async def on_app_command_error(self, interaction, error):
-        error = getattr(error, "original", error)
-        if isinstance(error, commands.MissingAnyRole):
-            role_mentions = [f"<@&{rid}>" for rid in OFFICER_ROLES if interaction.guild.get_role(rid)]
-            embed = make_embed(
-                type="Error",
-                title="Permission Denied",
-                description=f"Requires roles: {', '.join(role_mentions)}"
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True, delete_after=10)
-        elif isinstance(error, commands.CommandError):
-            embed = make_embed(
-                type="Error",
-                title="Format Error",
-                description=str(error)
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True, delete_after=15)
 
 async def setup(bot):
     await bot.add_cog(Officers(bot))
