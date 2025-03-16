@@ -8,18 +8,22 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
 class Client(commands.Bot):
+    def __init__(self, command_prefix, intents):
+        super().__init__(
+            command_prefix=command_prefix,
+            intents=intents,
+            help_command=None,
+        )
+
     async def setup_hook(self):
         await self.load_extension('cogs.utilities')
 
+        guild = discord.Object(id=GUILD_ID)
+        await self.tree.sync(guild=guild)
+        print(f"Commands synced to guild {GUILD_ID}")
+
     async def on_ready(self):
         print(f'Logged in as {self.user} (ID: {self.user.id})')
-
-        try:
-            guild = discord.Object(id=GUILD_ID)
-            synced = await self.tree.sync(guild=guild)
-            print(f"Synced {len(synced)} commands to guild {GUILD_ID}")
-        except Exception as e:
-            print(f"Error syncing commands: {e}")
 
 intents = discord.Intents.default()
 intents.message_content = True
