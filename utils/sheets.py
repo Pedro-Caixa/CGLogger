@@ -4,6 +4,76 @@ from googleapiclient.discovery import build
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 CREDS = Credentials.from_service_account_file("creds.json", scopes=SCOPES)
+MAIN_SHEET_HEADER_ROWS = [15, 45, 90, 154] 
+
+def update_officer_stat(worksheet, row_index, header_name, amount, is_add=True):
+    """Helper function to update a numeric stat for an officer in the given column.
+    
+    - If `is_add` is True, it adds the amount.
+    - If `is_add` is False, it subtracts the amount but ensures the value doesn't go below zero.
+    """
+    try:
+        col_index = get_column_index(worksheet, row_index, header_name)
+        if not col_index:
+            print(f"Header '{header_name}' not found")
+            return False
+        
+        current_value = worksheet.cell(row_index, col_index).value
+        try:
+            new_value = int(current_value)
+        except (ValueError, TypeError):
+            new_value = 0
+
+        if is_add:
+            new_value += amount
+        else:
+            new_value = max(0, new_value - amount)
+
+        worksheet.update_cell(row_index, col_index, new_value)
+        return True
+    except Exception as e:
+        print(f"Error updating '{header_name}': {e}")
+        return False
+
+def find_user_sheet(username):
+    """
+    Search for the given username in the Officer and Main sheets.
+    Returns:
+        - "Officer" if the user is found in the Officer Sheet.
+        - "Main" if the user is not in the Officer Sheet but is found in the Main Sheet.
+        - None if the user is not found in either sheet.
+    """
+    sheet_priority = [
+        ("Officer", "Officer Sheet"),
+        ("Main", "Main Sheet")
+    ]
+    
+    for key, worksheet_name in sheet_priority:
+        try:
+            spreadsheet = client.open_by_key(sheets[key])
+            worksheet = spreadsheet.worksheet(worksheet_name)
+            all_values = worksheet.get_all_values()
+            for row in all_values:
+                if username in row:
+                    return key
+        except Exception as e:
+            print(f"Error checking sheet {key}: {e}")
+    return None
+
+
+def get_column_index(worksheet, user_row, header_name):
+    """Find column index for a header in the nearest header row above the user's row."""
+    try:
+        header_row = max([hr for hr in MAIN_SHEET_HEADER_ROWS if hr <= user_row])
+        
+        headers = worksheet.row_values(header_row)
+        return headers.index(header_name) + 1
+    except (ValueError, KeyError):
+        print(f"Header '{header_name}' not found in row {header_row}")
+        return None
+    except Exception as e:
+        print(f"Error finding column: {e}")
+        return None
 
 client = gspread.authorize(CREDS)
 
@@ -45,10 +115,21 @@ def get_background_color(sheetName, cell_range):
         return None
 
 def get_row_by_username(sheetName, username):
-    """Find the row containing the username."""
+    """Find the row containing the username in the given sheet.
+    
+    For example:
+      - If sheetName is "Officer", the worksheet "Officer Sheet" is used.
+      - If sheetName is "Main", the worksheet "Main Sheet" is used.
+    """
     try:
         spreadsheet = client.open_by_key(sheets[sheetName])
-        worksheet = spreadsheet.worksheet("Main Sheet")
+
+        if sheetName.lower() == "officer":
+            worksheet_name = "Officer Sheet"
+        else:
+            worksheet_name = "Main Sheet"
+            
+        worksheet = spreadsheet.worksheet(worksheet_name)
         all_values = worksheet.get_all_values()
         
         for row_index, row in enumerate(all_values):
@@ -92,3 +173,137 @@ def get_cell_color(sheetName, username, column_identifier):
     except Exception as e:
         print(f"An error occurred: {e}")
         return None
+    
+def add_ep(username, amount):
+    """Add EP to a user's total with dynamic column detection"""
+    try:
+        spreadsheet = client.open_by_key(sheets["Main"])
+        worksheet = spreadsheet.worksheet("Main Sheet")
+        
+        row_index = get_row_by_username("Main", username)
+        if not row_index:
+            print(f"User {username} not found")
+            return False
+            
+        ep_col = get_column_index(worksheet, row_index, "EP")
+        if not ep_col:
+            return False
+            
+        current_value = worksheet.cell(row_index, ep_col).value
+        try:
+            new_value = int(current_value) + amount
+        except (ValueError, TypeError):
+            new_value = amount
+            
+        worksheet.update_cell(row_index, ep_col, new_value)
+        return True
+        
+    except Exception as e:
+        return False
+
+def remove_ep(username, amount):
+    """Remove EP from a user's total with dynamic column detection"""
+    try:
+        spreadsheet = client.open_by_key(sheets["Main"])
+        worksheet = spreadsheet.worksheet("Main Sheet")
+        
+        row_index = get_row_by_username("Main", username)
+        if not row_index:
+            return False
+            
+        ep_col = get_column_index(worksheet, row_index, "EP")
+        if not ep_col:
+            return False
+            
+        current_value = worksheet.cell(row_index, ep_col).value
+        try:
+            current_ep = int(current_value)
+        except (ValueError, TypeError):
+            current_ep = 0
+            
+        new_value = max(0, current_ep - amount)
+        worksheet.update_cell(row_index, ep_col, new_value)
+        return True
+        
+    except Exception as e:
+        return False
+
+def get_ep(username):
+    """Get the EP value of a user with dynamic column detection"""
+    try:
+        spreadsheet = client.open_by_key(sheets["Main"])
+        worksheet = spreadsheet.worksheet("Main Sheet")
+        
+        row_index = get_row_by_username("Main", username)
+        if not row_index:
+            return None
+            
+        ep_col = get_column_index(worksheet, row_index, "EP")
+        if not ep_col:
+            return None
+            
+        current_value = worksheet.cell(row_index, ep_col).value
+        try:
+            current_ep = int(current_value)
+        except (ValueError, TypeError):
+            current_ep = 0
+            
+        return current_ep
+        
+    except Exception as e:
+        return None
+    
+def add_events_hosted(username, amount, event_type):
+    """Add event-hosting points (OP) to an officer's total."""
+    try:
+        spreadsheet = client.open_by_key(sheets["Officer"])
+        worksheet = spreadsheet.worksheet("Officer Sheet")
+        
+        row_index = get_row_by_username("Officer", username)
+        if not row_index:
+            print(f"User {username} not found in Officer sheet")
+            return False
+        
+        update_officer_stat(worksheet, row_index, "OP", amount)
+
+        event_columns = {
+            "Company": "Company Events Hosted",
+            "Wide": "Events Hosted"
+        }
+        
+        if event_type in event_columns:
+            update_officer_stat(worksheet, row_index, event_columns[event_type], amount)
+
+        return True
+    except Exception as e:
+        print(f"Error in add_events_hosted: {e}")
+        return False
+
+
+def remove_events_hosted(username, amount, event_type):
+    """Remove event-hosting points (OP) from an officer's total."""
+    try:
+        spreadsheet = client.open_by_key(sheets["Officer"])
+        worksheet = spreadsheet.worksheet("Officer Sheet")
+        
+        row_index = get_row_by_username("Officer", username)
+        if not row_index:
+            print(f"User {username} not found in Officer sheet")
+            return False
+        
+        # Remove OP points
+        update_officer_stat(worksheet, row_index, "OP", amount, is_add=False)
+
+        # Remove event-specific column values
+        event_columns = {
+            "Company": "Company Events Hosted",
+            "Wide": "Events Hosted"
+        }
+        
+        if event_type in event_columns:
+            update_officer_stat(worksheet, row_index, event_columns[event_type], amount, is_add=False)
+
+        return True
+    except Exception as e:
+        print(f"Error in remove_events_hosted: {e}")
+        return False

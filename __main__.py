@@ -29,6 +29,6 @@ class Client(commands.Bot):
 intents = discord.Intents.default()
 intents.message_content = True
 
-client = Client(command_prefix="c!", intents=intents)
+client = Client(command_prefix="-", intents=intents)
 
 client.run(DISCORD_TOKEN)
