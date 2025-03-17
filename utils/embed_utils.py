@@ -3,10 +3,11 @@ from datetime import datetime
 
 def make_embed(
     type: str, 
-    title: str,  # Customizable title
+    title: str,
     description: str = None, 
     fields: list[tuple[str, str, bool]] = None, 
-    ) -> discord.Embed:
+    icon_url: str = None,
+) -> discord.Embed:
     """
     Create a customizable embed with a specific type, title, and optional fields.
 
@@ -14,7 +15,7 @@ def make_embed(
     :param title: The title of the embed.
     :param description: The description of the embed.
     :param fields: A list of tuples (name, value, inline) to add fields to the embed.
-    :param footer: The footer text for the embed.
+    :param footer_icon_url: Optional URL for the footer icon.
     :return: A discord.Embed object.
     """
     colors = {
@@ -35,6 +36,13 @@ def make_embed(
         for name, value, inline in fields:
             embed.add_field(name=name, value=value, inline=inline)
 
-    embed.set_footer(text=f"CG Systems | {title}") 
+    if icon_url :
+        embed.set_footer(
+            text=f"CG Systems | {title}",
+            icon_url=icon_url 
+        )
+    else:
+        embed.set_footer(text=f"CG Systems | {title}")
+
     embed.timestamp = datetime.now()
     return embed
