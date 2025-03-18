@@ -141,6 +141,44 @@ class Utilities(commands.Cog):
                 await loading_message.delete()
             await ctx.send(embed=embed)
 
+    @commands.hybrid_command(name="leaderboard", description="Show the top 10 users in the leaderboard")
+    @app_commands.guilds(discord.Object(id=GUILD_ID))
+    async def leaderboard(self, ctx: commands.Context):
+        """Retrieve and display the top 10 users from the leaderboard."""
+        try:
+            spreadsheet = client.open_by_key(sheets["Leaderboard"])
+            worksheet = spreadsheet.worksheet("Leaderboard")
+            rows = worksheet.get_all_values()[5:15]
+
+            if not rows:
+                raise commands.CommandError("No data found in the leaderboard.")
+
+            embed = make_embed(
+                type="Info",
+                title="🏆 Leaderboard",
+                description="Here are the top 10 users in the leaderboard:"
+            )
+
+            medals = ["🥇", "🥈", "🥉"]
+            for i, row in enumerate(rows):
+                position, username, points = row
+                medal = medals[i] if i < 3 else ""
+                embed.add_field(
+                    name=f"{medal} {position}. {username}",
+                    value=f"Event Points: {points}",
+                    inline=False
+                )
+            embed.color = discord.Color.yellow()
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            embed = make_embed(
+                type="Error",
+                title="Error",
+                description=f"Failed to retrieve leaderboard data: {str(e)}"
+            )
+            await ctx.send(embed=embed)
+
     @commands.Cog.listener()
     async def on_command_error(self, ctx, error):
         if isinstance(error, commands.CommandOnCooldown):

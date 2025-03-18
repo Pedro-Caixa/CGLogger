@@ -11,6 +11,7 @@ from utils.embed_utils import make_embed
 from utils.log_utils import log_command
 from utils.sheets import add_ep, remove_ep, get_ep, find_user_sheet, batch_update_points
 from utils.helpers import format_username
+from discord.colour import Colour
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -87,6 +88,23 @@ class Officers(commands.Cog):
         
         return raw_attendees
 
+    async def _process_extra_points(self, ctx, extra_points_line):
+        """Process extra points mentions and return a list of tuples (username, points)."""
+        extra_points_matches = re.findall(r"<@!?(\d+)>\s*\((\d+)\)", extra_points_line)
+        
+        if not extra_points_matches:
+            raise commands.CommandError("No valid extra points mentions found")
+        
+        extra_points = []
+        for user_id, points in extra_points_matches:
+            member = await ctx.guild.fetch_member(int(user_id))
+            username = format_username(member)
+            points = int(points)
+            if points > 5:
+                raise commands.CommandError(f"Invalid extra points value for {username} (max 5)")
+            extra_points.append((username, points))
+        
+        return extra_points
 
     def _format_attendee_list(self, attendees):
         """Format attendees list with truncation."""
@@ -121,9 +139,16 @@ class Officers(commands.Cog):
             if missing := [f for f in required_fields if f not in content]:
                 raise commands.CommandError(f"Missing fields: {', '.join(missing)}")
             
-            ep_match = re.search(r"EP for event:\s*(\d+)", content)
+            is_company_event = any(
+                kw in ctx.channel.name for kw in ["hound-event-logs", "riot-event-logs", "shock-event-logs"]
+            )
+
+            point_type = "CEP" if is_company_event else "EP"
+            ep_pattern = r"CEP for event:\s*(\d+)" if is_company_event else r"EP for event:\s*(\d+)"
+            ep_match = re.search(ep_pattern, content)
+
             if not ep_match or (ep_value := int(ep_match.group(1))) > 5:
-                raise commands.CommandError("Invalid EP value (max 5)")
+                raise commands.CommandError(f"Invalid {point_type} value (max 5)")
 
             event_match = re.search(r"Event:\s*(.+)", content)
             if not event_match:
@@ -150,8 +175,13 @@ class Officers(commands.Cog):
             
             raw_attendees = await self._process_attendees(ctx, attendees_match.group(1))
             attendee_list = self._format_attendee_list(raw_attendees)
+
+            extra_points_match = re.search(r"Extra points:\s*(.*)", content)
+            extra_points = []
+            if extra_points_match:
+                extra_points = await self._process_extra_points(ctx, extra_points_match.group(1))
+
             updates = []
-            print(raw_attendees)
             
             if event_type != "SSU" and host_name:
                 host_sheet = find_user_sheet(host_name) or "Main"
@@ -168,34 +198,43 @@ class Officers(commands.Cog):
                         "Company": "Company Events Hosted",
                         "Wide": "Events Hosted"
                     }
-                    if event_columns:
+                    if is_company_event:
+                        updates.append({
+                            "sheet": "Officer",
+                            "worksheet_name": "Officer Sheet",
+                            "username": host_name,
+                            "header": event_columns["Company"],
+                            "amount": 1,
+                            "is_add": True
+                        })
+                    else:
                         updates.append({
                             "sheet": "Officer",
                             "worksheet_name": "Officer Sheet",
                             "username": host_name,
                             "header": event_columns["Wide"],
-                            "amount": ep_value,
+                            "amount": 1,
                             "is_add": True
                         })
                 else:
+                    # Usuário em planilha "Main"
                     updates.append({
                         "sheet": "Main",
                         "worksheet_name": "Main Sheet",
                         "username": host_name,
-                        "header": "EP",
+                        "header": point_type,
                         "amount": ep_value,
                         "is_add": True
                     })
 
-            for attendee in raw_attendees:
-                attendee_sheet = find_user_sheet(attendee) or "Main"
-                print(attendee_sheet)
-                if attendee_sheet == "Officer":
+                for attendee in raw_attendees:
+                    attendee_sheet = find_user_sheet(attendee) or "Main"
+                    header = "OP" if attendee_sheet == "Officer" else point_type
                     updates.append({
-                        "sheet": "Officer",
-                        "worksheet_name": "Officer Sheet",
+                        "sheet": attendee_sheet,
+                        "worksheet_name": "Officer Sheet" if attendee_sheet == "Officer" else "Main Sheet",
                         "username": attendee,
-                        "header": "OP",
+                        "header": header,
                         "amount": ep_value,
                         "is_add": True
                     })
@@ -204,18 +243,41 @@ class Officers(commands.Cog):
                         "sheet": "Main",
                         "worksheet_name": "Main Sheet",
                         "username": attendee,
-                        "header": "EP",
+                        "header": point_type,
                         "amount": ep_value,
                         "is_add": True
                     })
+
+            for username, points in extra_points:
+                user_sheet = find_user_sheet(username) or "Main"
+                if user_sheet == "Officer":
+                    updates.append({
+                        "sheet": "Officer",
+                        "worksheet_name": "Officer Sheet",
+                        "username": username,
+                        "header": "OP",
+                        "amount": points,
+                        "is_add": True
+                    })
+                else:
+                    updates.append({
+                        "sheet": "Main",
+                        "worksheet_name": "Main Sheet",
+                        "username": username,
+                        "header": point_type,
+                        "amount": points,
+                        "is_add": True
+                    })
+
             batch_update_points(updates)
             event_id = str(uuid.uuid4())
+            embed_color = Colour.red() if is_company_event else Colour.green()
             embed = make_embed(
                 type="Success",
                 title="Event Logged!",
                 description=(
                     f"**Host:** {host_name if host_name else 'N/A'}\n"
-                    f"**EP Value:** {ep_value}\n"
+                    f"**{point_type} Value:** {ep_value}\n"
                     f"**Attendees ({len(raw_attendees)}):**\n{attendee_list}\n"
                     f"**Linked Message:** [Jump to Message]({replied_message.jump_url})\n"
                     f"**Logged by:** {ctx.author.name}"
@@ -233,14 +295,16 @@ class Officers(commands.Cog):
                 
                 archive_embed = make_embed(
                     type="Info",
-                    title=f"Event Archive: {event_type}",
+                    title=f"{'Company ' if is_company_event else ''}Event Archive: {event_type}",
                     description=(
                         f"**Host:** {host_name if host_name else 'N/A'}\n"
-                        f"**EP Awarded:** {ep_value}\n"
+                        f"**{point_type} Awarded:** {ep_value}\n"
                         f"**Attendees ({len(raw_attendees)}):**\n{attendee_list}\n"
+                        f"**Channel:** {ctx.channel.mention}\n"
                         f"**Logged by:** {ctx.author.mention}\n"
                     )
                 )
+                archive_embed.colour = embed_color
                 archive_embed.set_footer(text=f"Event ID: {event_id}", icon_url="https://cdn.discordapp.com/emojis/1155991227032936448.webp?size=128")
                 if files:
                     archive_embed.set_image(url="attachment://" + files[0].filename)
@@ -258,7 +322,7 @@ class Officers(commands.Cog):
                 user=ctx.author,
                 guild=ctx.guild,
                 Parameters=(
-                    f"EP: {ep_value} | Host: {host_name if host_name else 'N/A'} | "
+                    f"{point_type}: {ep_value} | Host: {host_name if host_name else 'N/A'} | "
                     f"Attendees: {len(raw_attendees)} | Event ID: {event_id}"
                 ),
                 EP_Value=ep_value,
@@ -276,6 +340,7 @@ class Officers(commands.Cog):
                             "Notes: Regular weekly meeting\n"
                             "Proof: attached-image.jpg\n"
                             "EP for event: 2\n"
+                            "Extra points: @Mention (2)\n"
                             "Ping: @EventManager```"
             )
             error_msg = await ctx.send(embed=embed)
