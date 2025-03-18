@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 from config import GUILD_ID
 from utils.embed_utils import make_embed
-from utils.sheets import get_row_by_username, get_cell_color, client, sheets, add_events_hosted
+from utils.sheets import get_row_by_username, get_cell_color, client, sheets, add_cep
 from utils.log_utils import log_command
 from utils.helpers import format_username
 
@@ -21,7 +21,7 @@ class Utilities(commands.Cog):
             title="Pong!",
             description=f"Bot latency is {latency}ms"
         )
-        add_events_hosted("Lazartemis", 2)
+        add_cep("Caxseii", 2)
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(
@@ -74,7 +74,7 @@ class Utilities(commands.Cog):
 
         ep_value, ep_status = quota_data["EP"]
         cep_value, cep_status = quota_data["CEP"]
-        igt_value, igt_status = quota_data["IGT"]
+        igt_value, igt_status = quota_data["In-game Time"]
 
         embed = make_embed(
             type="Info" if excused else "Error" if failed else "Success",

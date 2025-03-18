@@ -1,10 +1,206 @@
+import time
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from functools import lru_cache
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 CREDS = Credentials.from_service_account_file("creds.json", scopes=SCOPES)
 MAIN_SHEET_HEADER_ROWS = [15, 45, 90, 154] 
+
+def retry_with_backoff(func):
+    def wrapper(*args, **kwargs):
+        max_retries = 5
+        backoff = 1
+        for attempt in range(max_retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                if 'Quota exceeded' in str(e):
+                    print(f"Rate limit exceeded, retrying in {backoff} seconds...")
+                    time.sleep(backoff)
+                    backoff *= 2
+                else:
+                    raise
+        raise Exception("Max retries exceeded")
+    return wrapper
+
+@retry_with_backoff
+def batch_update_points(updates: list):
+    """
+    Process a list of update requests and perform a single batch update per sheet.
+    Each update is a dict with the following keys:
+      - "sheet": either "Officer" or "Main"
+      - "worksheet_name": the name of the worksheet (e.g. "Officer Sheet" or "Main Sheet")
+      - "username": the username to update
+      - "header": the column header to update
+      - "amount": the number to add (or subtract)
+      - "is_add": True to add points, False to subtract
+    """
+    grouped = {}
+    for upd in updates:
+        key = upd["sheet"]
+        grouped.setdefault(key, []).append(upd)
+    
+    for sheet_key, ups in grouped.items():
+        spreadsheet = client.open_by_key(sheets[sheet_key])
+        worksheet_name = ups[0]["worksheet_name"]
+        worksheet = spreadsheet.worksheet(worksheet_name)
+        cell_updates = []
+        for upd in ups:
+            row_index = get_row_by_username(sheet_key, upd["username"])
+            if not row_index:
+                print(f"User {upd['username']} not found in {sheet_key} sheet")
+                continue
+            col_index = get_column_index(worksheet, row_index, upd["header"])
+            if not col_index:
+                print(f"Header '{upd['header']}' not found for {upd['username']}")
+                continue
+            current_value = worksheet.cell(row_index, col_index).value
+            try:
+                current_value = int(current_value)
+            except (ValueError, TypeError):
+                current_value = 0
+            if upd["is_add"]:
+                new_value = current_value + upd["amount"]
+            else:
+                new_value = max(0, current_value - upd["amount"])
+            cell_ref = gspread.utils.rowcol_to_a1(row_index, col_index)
+            cell_updates.append({
+                "range": cell_ref,
+                "values": [[new_value]]
+            })
+            if upd["header"] in ["EP", "CEP"]:
+                total_header = f"Total {upd['header']}"
+                total_col_index = get_column_index(worksheet, row_index, total_header)
+                if total_col_index:
+                    total_current_value = worksheet.cell(row_index, total_col_index).value
+                    try:
+                        total_current_value = int(total_current_value)
+                    except (ValueError, TypeError):
+                        total_current_value = 0
+                    if upd["is_add"]:
+                        total_new_value = total_current_value + upd["amount"]
+                    else:
+                        total_new_value = max(0, total_current_value - upd["amount"])
+                    total_cell_ref = gspread.utils.rowcol_to_a1(row_index, total_col_index)
+                    cell_updates.append({
+                        "range": total_cell_ref,
+                        "values": [[total_new_value]]
+                    })
+        if cell_updates:
+            worksheet.batch_update(cell_updates)
+
+@retry_with_backoff
+@lru_cache(maxsize=128)
+def get_column_index(worksheet, user_row, header_name):
+    """Find column index for a header in the nearest header row above the user's row."""
+    try:
+        header_row = max([hr for hr in MAIN_SHEET_HEADER_ROWS if hr <= user_row])
+        
+        headers = worksheet.row_values(header_row)
+        return headers.index(header_name) + 1
+    except (ValueError, KeyError):
+        print(f"Header '{header_name}' not found in row {header_row}")
+        return None
+    except Exception as e:
+        print(f"Error finding column: {e}")
+        return None
+
+@retry_with_backoff
+@lru_cache(maxsize=128)
+def get_row_by_username(sheetName, username):
+    """Find the row containing the username in the given sheet.
+    
+    For example:
+      - If sheetName is "Officer", the worksheet "Officer Sheet" is used.
+      - If sheetName is "Main", the worksheet "Main Sheet" is used.
+    """
+    try:
+        spreadsheet = client.open_by_key(sheets[sheetName])
+
+        if sheetName.lower() == "officer":
+            worksheet_name = "Officer Sheet"
+        else:
+            worksheet_name = "Main Sheet"
+            
+        worksheet = spreadsheet.worksheet(worksheet_name)
+        all_values = worksheet.get_all_values()
+        
+        for row_index, row in enumerate(all_values):
+            if username in row:
+                return row_index + 1
+        print(f"Username '{username}' not found in sheet '{sheetName}'.")
+        return None
+    
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
+client = gspread.authorize(CREDS)
+
+service = build("sheets", "v4", credentials=CREDS)
+
+sheets = {
+    "Main": "1bzZk0w_oxKDkhHOjJ6MQd9D6-SfqG4a1bvRXzj938dY",
+    "Officer": "1bzZk0w_oxKDkhHOjJ6MQd9D6-SfqG4a1bvRXzj938dY",
+    "Leaderboard": "1bzZk0w_oxKDkhHOjJ6MQd9D6-SfqG4a1bvRXzj938dY"
+}
+
+def rgb_to_hex(red, green, blue):
+    """Convert RGB values (0-1 range) to a hex color code."""
+    r = int(red * 255)
+    g = int(green * 255)
+    b = int(blue * 255)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+@retry_with_backoff
+def get_background_color(sheetName, cell_range):
+    """Get the background color of a cell in hex format."""
+    try:
+        spreadsheet_id = sheets[sheetName]
+        sheet_metadata = service.spreadsheets().get(
+            spreadsheetId=spreadsheet_id,
+            ranges=[cell_range],
+            includeGridData=True
+        ).execute()
+        
+        grid_data = sheet_metadata["sheets"][0]["data"][0]["rowData"][0]["values"][0]
+        if "effectiveFormat" in grid_data:
+            bg_color = grid_data["effectiveFormat"]["backgroundColor"]
+            hex_color = rgb_to_hex(bg_color.get("red", 1), bg_color.get("green", 1), bg_color.get("blue", 1))
+            return hex_color
+        else:
+            return None
+    
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
+def get_main_stat(username, header_name):
+    """Get the value of a user's stat (EP/CEP) from the Main sheet."""
+    try:
+        spreadsheet = client.open_by_key(sheets["Main"])
+        worksheet = spreadsheet.worksheet("Main Sheet")
+        
+        row_index = get_row_by_username("Main", username)
+        if not row_index:
+            print(f"User {username} not found in Main sheet")
+            return None
+            
+        col_index = get_column_index(worksheet, row_index, header_name)
+        if not col_index:
+            print(f"Header '{header_name}' not found")
+            return None
+            
+        current_value = worksheet.cell(row_index, col_index).value
+        try:
+            return int(current_value)
+        except (ValueError, TypeError):
+            return 0
+    except Exception as e:
+        print(f"Error getting '{header_name}' for {username}: {e}")
+        return None
 
 def update_officer_stat(worksheet, row_index, header_name, amount, is_add=True):
     """Helper function to update a numeric stat for an officer in the given column.
@@ -60,88 +256,6 @@ def find_user_sheet(username):
             print(f"Error checking sheet {key}: {e}")
     return None
 
-
-def get_column_index(worksheet, user_row, header_name):
-    """Find column index for a header in the nearest header row above the user's row."""
-    try:
-        header_row = max([hr for hr in MAIN_SHEET_HEADER_ROWS if hr <= user_row])
-        
-        headers = worksheet.row_values(header_row)
-        return headers.index(header_name) + 1
-    except (ValueError, KeyError):
-        print(f"Header '{header_name}' not found in row {header_row}")
-        return None
-    except Exception as e:
-        print(f"Error finding column: {e}")
-        return None
-
-client = gspread.authorize(CREDS)
-
-service = build("sheets", "v4", credentials=CREDS)
-
-sheets = {
-    "Main": "1bzZk0w_oxKDkhHOjJ6MQd9D6-SfqG4a1bvRXzj938dY",
-    "Officer": "1bzZk0w_oxKDkhHOjJ6MQd9D6-SfqG4a1bvRXzj938dY",
-    "Leaderboard": "1bzZk0w_oxKDkhHOjJ6MQd9D6-SfqG4a1bvRXzj938dY"
-}
-
-def rgb_to_hex(red, green, blue):
-    """Convert RGB values (0-1 range) to a hex color code."""
-    r = int(red * 255)
-    g = int(green * 255)
-    b = int(blue * 255)
-    return f"#{r:02x}{g:02x}{b:02x}"
-
-def get_background_color(sheetName, cell_range):
-    """Get the background color of a cell in hex format."""
-    try:
-        spreadsheet_id = sheets[sheetName]
-        sheet_metadata = service.spreadsheets().get(
-            spreadsheetId=spreadsheet_id,
-            ranges=[cell_range],
-            includeGridData=True
-        ).execute()
-        
-        grid_data = sheet_metadata["sheets"][0]["data"][0]["rowData"][0]["values"][0]
-        if "effectiveFormat" in grid_data:
-            bg_color = grid_data["effectiveFormat"]["backgroundColor"]
-            hex_color = rgb_to_hex(bg_color.get("red", 1), bg_color.get("green", 1), bg_color.get("blue", 1))
-            return hex_color
-        else:
-            return None
-    
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        return None
-
-def get_row_by_username(sheetName, username):
-    """Find the row containing the username in the given sheet.
-    
-    For example:
-      - If sheetName is "Officer", the worksheet "Officer Sheet" is used.
-      - If sheetName is "Main", the worksheet "Main Sheet" is used.
-    """
-    try:
-        spreadsheet = client.open_by_key(sheets[sheetName])
-
-        if sheetName.lower() == "officer":
-            worksheet_name = "Officer Sheet"
-        else:
-            worksheet_name = "Main Sheet"
-            
-        worksheet = spreadsheet.worksheet(worksheet_name)
-        all_values = worksheet.get_all_values()
-        
-        for row_index, row in enumerate(all_values):
-            if username in row:
-                return row_index + 1
-        print(f"Username '{username}' not found in sheet '{sheetName}'.")
-        return None
-    
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        return None
-
 def get_cell_color(sheetName, username, column_identifier):
     """
     Get the background color of a cell in the username's row.
@@ -175,83 +289,29 @@ def get_cell_color(sheetName, username, column_identifier):
         return None
     
 def add_ep(username, amount):
-    """Add EP to a user's total with dynamic column detection"""
-    try:
-        spreadsheet = client.open_by_key(sheets["Main"])
-        worksheet = spreadsheet.worksheet("Main Sheet")
-        
-        row_index = get_row_by_username("Main", username)
-        if not row_index:
-            print(f"User {username} not found")
-            return False
-            
-        ep_col = get_column_index(worksheet, row_index, "EP")
-        if not ep_col:
-            return False
-            
-        current_value = worksheet.cell(row_index, ep_col).value
-        try:
-            new_value = int(current_value) + amount
-        except (ValueError, TypeError):
-            new_value = amount
-            
-        worksheet.update_cell(row_index, ep_col, new_value)
-        return True
-        
-    except Exception as e:
-        return False
+    update_main_stat(username, "Total EP", amount, is_add=True)
+    return update_main_stat(username, "EP", amount, is_add=True)
 
 def remove_ep(username, amount):
-    """Remove EP from a user's total with dynamic column detection"""
-    try:
-        spreadsheet = client.open_by_key(sheets["Main"])
-        worksheet = spreadsheet.worksheet("Main Sheet")
-        
-        row_index = get_row_by_username("Main", username)
-        if not row_index:
-            return False
-            
-        ep_col = get_column_index(worksheet, row_index, "EP")
-        if not ep_col:
-            return False
-            
-        current_value = worksheet.cell(row_index, ep_col).value
-        try:
-            current_ep = int(current_value)
-        except (ValueError, TypeError):
-            current_ep = 0
-            
-        new_value = max(0, current_ep - amount)
-        worksheet.update_cell(row_index, ep_col, new_value)
-        return True
-        
-    except Exception as e:
-        return False
+    update_main_stat(username, "Total EP", amount, is_add=False)
+    return update_main_stat(username, "EP", amount, is_add=False)
 
 def get_ep(username):
-    """Get the EP value of a user with dynamic column detection"""
-    try:
-        spreadsheet = client.open_by_key(sheets["Main"])
-        worksheet = spreadsheet.worksheet("Main Sheet")
-        
-        row_index = get_row_by_username("Main", username)
-        if not row_index:
-            return None
-            
-        ep_col = get_column_index(worksheet, row_index, "EP")
-        if not ep_col:
-            return None
-            
-        current_value = worksheet.cell(row_index, ep_col).value
-        try:
-            current_ep = int(current_value)
-        except (ValueError, TypeError):
-            current_ep = 0
-            
-        return current_ep
-        
-    except Exception as e:
-        return None
+    return get_main_stat(username, "EP")
+
+def add_cep(username, amount):
+    """Add CEP to a user's total"""
+    update_main_stat(username, "Total CEP", amount, is_add=True)
+    return update_main_stat(username, "CEP", amount, is_add=True)
+
+def remove_cep(username, amount):
+    """Remove CEP from a user's total"""
+    update_main_stat(username, "Total CEP", amount, is_add=False)
+    return update_main_stat(username, "CEP", amount, is_add=False)
+
+def get_cep(username):
+    """Get the CEP value of a user"""
+    return get_main_stat(username, "CEP")
     
 def add_events_hosted(username, amount, event_type):
     """Add event-hosting points (OP) to an officer's total."""
@@ -291,10 +351,8 @@ def remove_events_hosted(username, amount, event_type):
             print(f"User {username} not found in Officer sheet")
             return False
         
-        # Remove OP points
         update_officer_stat(worksheet, row_index, "OP", amount, is_add=False)
 
-        # Remove event-specific column values
         event_columns = {
             "Company": "Company Events Hosted",
             "Wide": "Events Hosted"

@@ -9,7 +9,7 @@ import aiohttp
 from config import GUILD_ID, OFFICER_ROLES
 from utils.embed_utils import make_embed
 from utils.log_utils import log_command
-from utils.sheets import add_ep, remove_ep, get_ep
+from utils.sheets import add_ep, remove_ep, get_ep, find_user_sheet, batch_update_points
 from utils.helpers import format_username
 from dotenv import load_dotenv
 
@@ -74,7 +74,7 @@ class Officers(commands.Cog):
         return commands.check(predicate)
 
     async def _process_attendees(self, ctx, attendees_line):
-        """Process attendee mentions into formatted list."""
+        """Process attendee mentions and return a list of formatted usernames."""
         attendee_mentions = re.findall(r"<@!?(\d+)>", attendees_line)
         
         if not attendee_mentions:
@@ -85,7 +85,8 @@ class Officers(commands.Cog):
             member = await ctx.guild.fetch_member(int(attendee_id))
             raw_attendees.append(format_username(member))
         
-        return self._format_attendee_list(raw_attendees)
+        return raw_attendees
+
 
     def _format_attendee_list(self, attendees):
         """Format attendees list with truncation."""
@@ -124,16 +125,24 @@ class Officers(commands.Cog):
             if not ep_match or (ep_value := int(ep_match.group(1))) > 5:
                 raise commands.CommandError("Invalid EP value (max 5)")
 
+            event_match = re.search(r"Event:\s*(.+)", content)
+            if not event_match:
+                raise commands.CommandError("Missing event information")
+            
+            event_type = event_match.group(1).strip()
+
             host_match = re.search(r"Hosted by:\s*(.+)", content)
-            if not host_match:
+            if not host_match and event_type != "SSU":
                 raise commands.CommandError("Missing host information")
             
-            host_content = host_match.group(1)
-            if host_mention := re.search(r"<@!?(\d+)>", host_content):
-                member = await ctx.guild.fetch_member(int(host_mention.group(1)))
-                host_name = format_username(member)
-            else:
-                host_name = host_content.split("|")[1].strip() if "|" in host_content else host_content
+            host_name = None
+            if event_type != "SSU":
+                host_content = host_match.group(1)
+                if host_mention := re.search(r"<@!?(\d+)>", host_content):
+                    member = await ctx.guild.fetch_member(int(host_mention.group(1)))
+                    host_name = format_username(member)
+                else:
+                    host_name = host_content.split("|")[1].strip() if "|" in host_content else host_content
 
             attendees_match = re.search(r"Attendees:\s*(.*)", content)
             if not attendees_match:
@@ -141,14 +150,71 @@ class Officers(commands.Cog):
             
             raw_attendees = await self._process_attendees(ctx, attendees_match.group(1))
             attendee_list = self._format_attendee_list(raw_attendees)
+            updates = []
+            print(raw_attendees)
+            
+            if event_type != "SSU" and host_name:
+                host_sheet = find_user_sheet(host_name) or "Main"
+                if host_sheet == "Officer":
+                    updates.append({
+                        "sheet": "Officer",
+                        "worksheet_name": "Officer Sheet",
+                        "username": host_name,
+                        "header": "OP",
+                        "amount": ep_value,
+                        "is_add": True
+                    })
+                    event_columns = {
+                        "Company": "Company Events Hosted",
+                        "Wide": "Events Hosted"
+                    }
+                    if event_columns:
+                        updates.append({
+                            "sheet": "Officer",
+                            "worksheet_name": "Officer Sheet",
+                            "username": host_name,
+                            "header": event_columns["Wide"],
+                            "amount": ep_value,
+                            "is_add": True
+                        })
+                else:
+                    updates.append({
+                        "sheet": "Main",
+                        "worksheet_name": "Main Sheet",
+                        "username": host_name,
+                        "header": "EP",
+                        "amount": ep_value,
+                        "is_add": True
+                    })
 
+            for attendee in raw_attendees:
+                attendee_sheet = find_user_sheet(attendee) or "Main"
+                print(attendee_sheet)
+                if attendee_sheet == "Officer":
+                    updates.append({
+                        "sheet": "Officer",
+                        "worksheet_name": "Officer Sheet",
+                        "username": attendee,
+                        "header": "OP",
+                        "amount": ep_value,
+                        "is_add": True
+                    })
+                else:
+                    updates.append({
+                        "sheet": "Main",
+                        "worksheet_name": "Main Sheet",
+                        "username": attendee,
+                        "header": "EP",
+                        "amount": ep_value,
+                        "is_add": True
+                    })
+            batch_update_points(updates)
             event_id = str(uuid.uuid4())
-
             embed = make_embed(
                 type="Success",
                 title="Event Logged!",
                 description=(
-                    f"**Host:** {host_name}\n"
+                    f"**Host:** {host_name if host_name else 'N/A'}\n"
                     f"**EP Value:** {ep_value}\n"
                     f"**Attendees ({len(raw_attendees)}):**\n{attendee_list}\n"
                     f"**Linked Message:** [Jump to Message]({replied_message.jump_url})\n"
@@ -167,9 +233,9 @@ class Officers(commands.Cog):
                 
                 archive_embed = make_embed(
                     type="Info",
-                    title=f"Event Archive: {re.search(r'Event:\s*(.*)', content).group(1)}",
+                    title=f"Event Archive: {event_type}",
                     description=(
-                        f"**Host:** {host_name}\n"
+                        f"**Host:** {host_name if host_name else 'N/A'}\n"
                         f"**EP Awarded:** {ep_value}\n"
                         f"**Attendees ({len(raw_attendees)}):**\n{attendee_list}\n"
                         f"**Logged by:** {ctx.author.mention}\n"
@@ -192,7 +258,7 @@ class Officers(commands.Cog):
                 user=ctx.author,
                 guild=ctx.guild,
                 Parameters=(
-                    f"EP: {ep_value} | Host: {host_name} | "
+                    f"EP: {ep_value} | Host: {host_name if host_name else 'N/A'} | "
                     f"Attendees: {len(raw_attendees)} | Event ID: {event_id}"
                 ),
                 EP_Value=ep_value,
