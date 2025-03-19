@@ -6,7 +6,7 @@ from discord.ext import commands
 from discord import app_commands
 import re
 import aiohttp
-from config import GUILD_ID, OFFICER_ROLES
+from config import GUILD_ID, OFFICER_ROLES, STARTER_ROLES
 from utils.embed_utils import make_embed
 from utils.log_utils import log_command
 from utils.sheets import add_ep, remove_ep, get_ep, find_user_sheet, batch_update_points
@@ -217,7 +217,6 @@ class Officers(commands.Cog):
                             "is_add": True
                         })
                 else:
-                    # Usuário em planilha "Main"
                     updates.append({
                         "sheet": "Main",
                         "worksheet_name": "Main Sheet",
@@ -348,6 +347,146 @@ class Officers(commands.Cog):
             return
 
         self.bot.loop.create_task(delete_messages_after_delay(self.bot, [ctx.message, replied_message, success_msg], 5))
+
+    @commands.hybrid_command(name="logtime", description="Log time from a formatted message")
+    @app_commands.guilds(discord.Object(id=GUILD_ID))
+    @is_officer()
+    @requires_reply()
+    async def logtime(self, ctx: commands.Context):
+        replied_message = None
+        try:
+            replied_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+            content = replied_message.content
+
+            if len(replied_message.attachments) < 2:
+                raise commands.CommandError("At least two proof images are required")
+
+            required_fields = ["Username:", "Time Started:", "Time Ended:", "Time logged:"]
+            if missing := [f for f in required_fields if f not in content]:
+                raise commands.CommandError(f"Missing fields: {', '.join(missing)}")
+
+            username_match = re.search(r"Username:\s*(<@!?(\d+)>|\S+)", content)
+            if not username_match:
+                raise commands.CommandError("Invalid or missing username")
+            
+            user_id = username_match.group(2)
+            if user_id:
+                member = await ctx.guild.fetch_member(int(user_id))
+                username = format_username(member)
+            else:
+                username = username_match.group(1)
+
+            time_logged_match = re.search(r"Time logged:\s*(\d+)", content)
+            if not time_logged_match:
+                raise commands.CommandError("Invalid or missing time logged")
+            
+            time_logged = int(time_logged_match.group(1))
+
+            updates = [{
+                "sheet": find_user_sheet(username) or "Main",
+                "worksheet_name": "Main Sheet",
+                "username": username,
+                "header": "In-game Time",
+                "amount": time_logged,
+                "is_add": True
+            }]
+
+            batch_update_points(updates)
+
+            embed = make_embed(
+                type="Success",
+                title="Time Logged!",
+                description=(
+                    f"**Username:** {username}\n"
+                    f"**Time Logged:** {time_logged} minutes\n"
+                    f"**Logged by:** {ctx.author.name}"
+                )
+            )
+            success_msg = await ctx.send(embed=embed)
+
+            await log_command(
+                bot=self.bot,
+                command_name="logtime",
+                user=ctx.author,
+                guild=ctx.guild,
+                Parameters=f"Username: {username} | Time Logged: {time_logged} minutes",
+                Time_Logged=time_logged
+            )
+        except Exception as e:
+            embed = make_embed(
+                type="Error",
+                title="Logging Failed",
+                description=f"Error: {str(e)}\n\n**Required format example:**\n"
+                            "```Username: @User\n"
+                            "Time Started: 6:17pm EST\n"
+                            "Time Ended: 7:42pm EST\n"
+                            "Time logged: 85\n"
+                            "Total time logged: 85\n"
+                            "Proof: attached-image1.jpg, attached-image2.jpg```"
+            )
+            error_msg = await ctx.send(embed=embed)
+            self.bot.loop.create_task(delete_messages_after_delay(self.bot, [ctx.message, error_msg], 5))
+            return
+
+        self.bot.loop.create_task(delete_messages_after_delay(self.bot, [ctx.message, replied_message, success_msg], 5))
+
+    @commands.hybrid_command(name="setupuser", description="Setup a new user with starter roles and nickname")
+    @app_commands.guilds(discord.Object(id=GUILD_ID))
+    @is_officer()
+    @requires_reply()
+    async def setupuser(self, ctx: commands.Context):
+            replied_message = None
+            try:
+                replied_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+                content = replied_message.content
+
+                username_match = re.search(r"Roblox Username:\s*(\S+)", content)
+                if not username_match:
+                    raise commands.CommandError("Missing or invalid Roblox Username")
+
+                roblox_username = username_match.group(1)
+                member = ctx.message.mentions[0] if ctx.message.mentions else ctx.author
+
+                roles = [ctx.guild.get_role(role_id) for role_id in STARTER_ROLES]
+                await member.add_roles(*roles, reason="Assigned starter roles")
+
+                new_nickname = f"[ST] | {roblox_username} | TIMEZONE"
+                await member.edit(nick=new_nickname, reason="Assigned starter nickname")
+
+                embed = make_embed(
+                    type="Success",
+                    title="User Setup Complete",
+                    description=(
+                        f"**Username:** {roblox_username}\n"
+                        f"**Roles Assigned:** {', '.join([role.name for role in roles])}\n"
+                        f"**New Nickname:** {new_nickname}\n"
+                        f"**Setup by:** {ctx.author.name}"
+                    )
+                )
+                success_msg = await ctx.send(embed=embed)
+
+                await log_command(
+                    bot=self.bot,
+                    command_name="setupuser",
+                    user=ctx.author,
+                    guild=ctx.guild,
+                    Parameters=f"Username: {roblox_username} | Roles: {', '.join([role.name for role in roles])} | Nickname: {new_nickname}",
+                    Roblox_Username=roblox_username,
+                    Roles_Assigned=[role.name for role in roles],
+                    New_Nickname=new_nickname
+                )
+            except Exception as e:
+                embed = make_embed(
+                    type="Error",
+                    title="Setup Failed",
+                    description=f"Error: {str(e)}\n\n**Required format example:**\n"
+                                "```Roblox Username: ExampleUser```"
+                )
+                error_msg = await ctx.send(embed=embed)
+                self.bot.loop.create_task(delete_messages_after_delay(self.bot, [ctx.message, error_msg], 5))
+                return
+
+            self.bot.loop.create_task(delete_messages_after_delay(self.bot, [ctx.message, replied_message, success_msg], 5))
 
 class EP(commands.Cog):
     def __init__(self, bot):

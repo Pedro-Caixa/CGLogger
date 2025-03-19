@@ -18,6 +18,7 @@ class Client(commands.Bot):
     async def setup_hook(self):
         await self.load_extension('cogs.utilities')
         await self.load_extension('cogs.officers')
+        await self.load_extension('cogs.events')
 
         guild = discord.Object(id=GUILD_ID)
         await self.tree.sync(guild=guild)
