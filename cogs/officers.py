@@ -9,7 +9,7 @@ import aiohttp
 from config import GUILD_ID, OFFICER_ROLES, STARTER_ROLES
 from utils.embed_utils import make_embed
 from utils.log_utils import log_command
-from utils.sheets import add_ep, remove_ep, get_ep, find_user_sheet, batch_update_points
+from utils.sheets import add_ep, remove_ep, get_ep, find_user_sheet, batch_update_points, add_new_user
 from utils.helpers import format_username
 from discord.colour import Colour
 from dotenv import load_dotenv
@@ -429,65 +429,75 @@ class Officers(commands.Cog):
             return
 
         self.bot.loop.create_task(delete_messages_after_delay(self.bot, [ctx.message, replied_message, success_msg], 5))
-
+        
     @commands.hybrid_command(name="setupuser", description="Setup a new user with starter roles and nickname")
     @app_commands.guilds(discord.Object(id=GUILD_ID))
     @is_officer()
     @requires_reply()
     async def setupuser(self, ctx: commands.Context):
-            replied_message = None
-            try:
-                replied_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-                content = replied_message.content
+        replied_message = None
+        try:
+            replied_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+            content = replied_message.content
+            print(f"Replied message content: {content}")
 
-                username_match = re.search(r"Roblox Username:\s*(\S+)", content)
-                if not username_match:
-                    raise commands.CommandError("Missing or invalid Roblox Username")
+            username_match = re.search(r"Roblox Username:\s*(\S+)", content)
+            print(f"Username match: {username_match}")
 
-                roblox_username = username_match.group(1)
-                member = ctx.message.mentions[0] if ctx.message.mentions else ctx.author
+            if not username_match:
+                raise commands.CommandError("Missing or invalid Roblox Username")
 
-                roles = [ctx.guild.get_role(role_id) for role_id in STARTER_ROLES]
-                await member.add_roles(*roles, reason="Assigned starter roles")
+            roblox_username = username_match.group(1)
+            print(f"Roblox Username: {roblox_username}")
 
-                new_nickname = f"[ST] | {roblox_username} | TIMEZONE"
-                await member.edit(nick=new_nickname, reason="Assigned starter nickname")
+            member = await ctx.guild.fetch_member(replied_message.author.id)
+            print(f"Replied message author: {member}")
 
-                embed = make_embed(
-                    type="Success",
-                    title="User Setup Complete",
-                    description=(
-                        f"**Username:** {roblox_username}\n"
-                        f"**Roles Assigned:** {', '.join([role.name for role in roles])}\n"
-                        f"**New Nickname:** {new_nickname}\n"
-                        f"**Setup by:** {ctx.author.name}"
-                    )
+            await member.edit(roles=[], reason="Removing all roles before assigning starter roles")
+            print(f"Removed all roles from {member.name}")
+
+            roles = [ctx.guild.get_role(role_id) for role_id in STARTER_ROLES]
+            await member.add_roles(*roles, reason="Assigned starter roles")
+            print(f"Assigned roles to {member.name}: {[role.name for role in roles]}")
+            add_new_user("Main", roblox_username)
+            embed = make_embed(
+                type="Success",
+                title="User Setup Complete",
+                description=(
+                    f"**Username:** {roblox_username}\n"
+                    f"**Roles Assigned:** {', '.join([role.name for role in roles])}\n"
+                    f"**Setup by:** {ctx.author.name}"
                 )
-                success_msg = await ctx.send(embed=embed)
+            )
+            success_msg = await ctx.send(embed=embed)
 
-                await log_command(
-                    bot=self.bot,
-                    command_name="setupuser",
-                    user=ctx.author,
-                    guild=ctx.guild,
-                    Parameters=f"Username: {roblox_username} | Roles: {', '.join([role.name for role in roles])} | Nickname: {new_nickname}",
-                    Roblox_Username=roblox_username,
-                    Roles_Assigned=[role.name for role in roles],
-                    New_Nickname=new_nickname
-                )
-            except Exception as e:
-                embed = make_embed(
-                    type="Error",
-                    title="Setup Failed",
-                    description=f"Error: {str(e)}\n\n**Required format example:**\n"
-                                "```Roblox Username: ExampleUser```"
-                )
-                error_msg = await ctx.send(embed=embed)
-                self.bot.loop.create_task(delete_messages_after_delay(self.bot, [ctx.message, error_msg], 5))
-                return
+            await log_command(
+                bot=self.bot,
+                command_name="setupuser",
+                user=ctx.author,
+                guild=ctx.guild,
+                Parameters=f"Roblox Username: {roblox_username} | Roles: {', '.join([role.name for role in roles])}",
+                Roblox_Username=roblox_username,
+                Roles_Assigned=[role.name for role in roles],
+            )
 
-            self.bot.loop.create_task(delete_messages_after_delay(self.bot, [ctx.message, replied_message, success_msg], 5))
+            await success_msg.delete()
+            await ctx.message.delete()
+            await replied_message.delete()
+            print("Deleted command, bot's success message, and replied messages")
 
+        except Exception as e:
+            embed = make_embed(
+                type="Error",
+                title="Setup Failed",
+                description=f"Error: {str(e)}\n\n**Required format example:**\n"
+                            "```Roblox Username: ExampleUser```"
+            )
+            error_msg = await ctx.send(embed=embed)
+            self.bot.loop.create_task(delete_messages_after_delay(self.bot, [ctx.message, error_msg], 5))
+            return
+
+        self.bot.loop.create_task(delete_messages_after_delay(self.bot, [ctx.message, replied_message, success_msg], 5))
 class EP(commands.Cog):
     def __init__(self, bot):
         self.bot = bot

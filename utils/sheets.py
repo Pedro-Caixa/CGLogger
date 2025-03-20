@@ -27,16 +27,6 @@ def retry_with_backoff(func):
 
 @retry_with_backoff
 def batch_update_points(updates: list):
-    """
-    Process a list of update requests and perform a single batch update per sheet.
-    Each update is a dict with the following keys:
-      - "sheet": either "Officer" or "Main"
-      - "worksheet_name": the name of the worksheet (e.g. "Officer Sheet" or "Main Sheet")
-      - "username": the username to update
-      - "header": the column header to update
-      - "amount": the number to add (or subtract)
-      - "is_add": True to add points, False to subtract
-    """
     grouped = {}
     for upd in updates:
         key = upd["sheet"]
@@ -90,6 +80,32 @@ def batch_update_points(updates: list):
                     })
         if cell_updates:
             worksheet.batch_update(cell_updates)
+
+@retry_with_backoff
+def add_new_user(sheetName, username):
+    """
+    Adiciona um novo usuário à planilha especificada.
+    - `sheetName`: Nome da planilha ("Officer" ou "Main").
+    - `username`: Nome de usuário a ser adicionado.
+    """
+    try:
+        spreadsheet = client.open_by_key(sheets[sheetName])
+        worksheet = spreadsheet.worksheet("Main Sheet" if sheetName == "Main" else "Officer Sheet")
+        
+        worksheet.insert_row([None, None, None, username, 0, 0, 0], index=128)
+        
+        
+        cell_ref = gspread.utils.rowcol_to_a1(128, 4)
+        worksheet.format(cell_ref, {
+            "backgroundColor": {
+                "red": 53 / 255,
+                "green": 28 / 255,
+                "blue": 117 / 255
+            }
+        })
+        print(f"User {username} has been successfuly added {sheetName}.")
+    except Exception as e:
+        print(f"Error adding user {username}: {e}")
 
 @retry_with_backoff
 @lru_cache(maxsize=128)

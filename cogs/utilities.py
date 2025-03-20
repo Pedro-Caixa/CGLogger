@@ -3,101 +3,14 @@ from discord.ext import commands
 from discord import app_commands
 from config import GUILD_ID
 from utils.embed_utils import make_embed
-from utils.sheets import get_row_by_username, get_cell_color, client, sheets, add_cep
+from utils.sheets import get_row_by_username, get_cell_color, client, sheets, add_cep, add_new_user
 from utils.log_utils import log_command
 from utils.helpers import format_username
 
 class Utilities(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-
-    @commands.hybrid_command(name="ping", description="Check the bot's latency")
-    @app_commands.guilds(discord.Object(id=GUILD_ID))
-    async def ping(self, ctx: commands.Context):
-        """Returns the bot's latency."""
-        latency = round(self.bot.latency * 1000)
-        embed = make_embed(
-            type="Success",
-            title="Pong!",
-            description=f"Bot latency is {latency}ms"
-        )
-        add_cep("Caxseii", 2)
-        await ctx.send(embed=embed)
-
-    @commands.hybrid_command(
-        name="quota",
-        description="Check user's quota status."
-    )
-    @commands.cooldown(1, 30, commands.BucketType.user)
-    @app_commands.guilds(discord.Object(id=GUILD_ID))
-    async def quota(
-        self, 
-        ctx: commands.Context, 
-        member: discord.Member = None, 
-        *, 
-        username: str = None
-    ):
-        """
-        Check a user's quota by retrieving their row from Google Sheets.
         
-        If no member or username is provided, defaults to the command author's nickname.
-        """
-        if member is not None:
-            username = format_username(member)
-        elif username is not None:
-            username = username.strip()
-        else:
-            username = format_username(ctx.author)
-        
-        loading_message = await self._send_loading(ctx)
-        
-        user_row_index = get_row_by_username("Main", username)
-        if not user_row_index:
-            return await self._send_response(
-                ctx, 
-                "Error", 
-                f"Username '{username}' not found in the sheet.", 
-                loading_message
-            )
-
-        user_row_color = get_cell_color("Main", username, 4)
-        excused, failed = user_row_color == "#351b75", user_row_color == "#ff0000"
-
-        quota_data = self._get_quota_data(username, user_row_index)
-        if not quota_data:
-            return await self._send_response(
-                ctx, 
-                "Error", 
-                "Failed to retrieve quota data.", 
-                loading_message
-            )
-
-        ep_value, ep_status = quota_data["EP"]
-        cep_value, cep_status = quota_data["CEP"]
-        igt_value, igt_status = quota_data["In-game Time"]
-
-        embed = make_embed(
-            type="Info" if excused else "Error" if failed else "Success",
-            title=f"{username}'s Quota{' (Excused)' if excused else ''}",
-            description="Here is the user's quota status:"
-        )
-        embed.add_field(name=f"EP {ep_status}", value=ep_value, inline=True)
-        embed.add_field(name=f"CEP {cep_status}", value=cep_value, inline=True)
-        embed.add_field(name=f"In-game Time {igt_status}", value=igt_value, inline=True)
-
-        await self._send_response(ctx, embed=embed, loading_message=loading_message)
-
-        await log_command(
-            bot=self.bot,
-            command_name="quota",
-            user=ctx.author,
-            guild=ctx.guild,
-            Parameters=username,
-            EP_Status=ep_status,
-            CEP_Status=cep_status,
-            IGT_Status=igt_status
-        )
-
     def _get_quota_data(self, username, row_index):
         """Retrieve quota data for a user from the Google Sheet."""
         try:
@@ -140,6 +53,94 @@ class Utilities(commands.Cog):
             if loading_message:
                 await loading_message.delete()
             await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="ping", description="Check the bot's latency")
+    @app_commands.guilds(discord.Object(id=GUILD_ID))
+    async def ping(self, ctx: commands.Context):
+        """Returns the bot's latency."""
+        latency = round(self.bot.latency * 1000)
+        embed = make_embed(
+            type="Success",
+            title="Pong!",
+            description=f"Bot latency is {latency}ms"
+        )
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(
+        name="quota",
+        description="Check user's quota status."
+    )
+    @commands.cooldown(1, 30, commands.BucketType.user)
+    @app_commands.guilds(discord.Object(id=GUILD_ID))
+    async def quota(
+        self, 
+        ctx: commands.Context, 
+        member: discord.Member = None, 
+        *, 
+        username: str = None
+    ):
+        """
+        Check a user's quota by retrieving their row from Google Sheets.
+        
+        If no member or username is provided, defaults to the command author's nickname.
+        """
+        if member is not None:
+            username = format_username(member)
+        elif username is not None:
+            username = username.strip()
+        else:
+            username = format_username(ctx.author)
+        
+        loading_message = await self._send_loading(ctx)
+        
+        user_row_index = get_row_by_username("Main", username)
+        if not user_row_index:
+            return await self._send_response(
+                ctx, 
+                "Error", 
+                f"Username '{username}' not found in the sheet.", 
+                loading_message
+            )
+
+        user_row_color = get_cell_color("Main", username, 4)
+        excused, failed = user_row_color == "#351c75", user_row_color == "#ff0000"
+
+        quota_data = self._get_quota_data(username, user_row_index)
+        if not quota_data:
+            return await self._send_response(
+                ctx, 
+                "Error", 
+                "Failed to retrieve quota data.", 
+                loading_message
+            )
+
+        ep_value, ep_status = quota_data["EP"]
+        cep_value, cep_status = quota_data["CEP"]
+        igt_value, igt_status = quota_data["IGT"]
+
+        embed = make_embed(
+            type="Info" if excused else "Error" if failed else "Success",
+            title=f"{username}'s Quota{' (Excused)' if excused else ''}",
+            description="Here is the user's quota status:"
+        )
+        embed.add_field(name=f"EP {ep_status}", value=ep_value, inline=True)
+        embed.add_field(name=f"CEP {cep_status}", value=cep_value, inline=True)
+        embed.add_field(name=f"In-game Time {igt_status}", value=igt_value, inline=True)
+
+        await self._send_response(ctx, embed=embed, loading_message=loading_message)
+
+        await log_command(
+            bot=self.bot,
+            command_name="quota",
+            user=ctx.author,
+            guild=ctx.guild,
+            Parameters=username,
+            EP_Status=ep_status,
+            CEP_Status=cep_status,
+            IGT_Status=igt_status
+        )
+
+
 
     @commands.hybrid_command(name="leaderboard", description="Show the top 10 users in the leaderboard")
     @app_commands.guilds(discord.Object(id=GUILD_ID))
