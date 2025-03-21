@@ -6,7 +6,7 @@ from functools import lru_cache
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 CREDS = Credentials.from_service_account_file("creds.json", scopes=SCOPES)
-MAIN_SHEET_HEADER_ROWS = [15, 45, 90, 154] 
+MAIN_SHEET_HEADER_ROWS = [16, 46, 91, 165] 
 
 def retry_with_backoff(func):
     def wrapper(*args, **kwargs):
@@ -137,7 +137,7 @@ def get_row_by_username(sheetName, username):
 
         if sheetName.lower() == "officer":
             worksheet_name = "Officer Sheet"
-        else:
+        elif sheetName.lower() == "main": 
             worksheet_name = "Main Sheet"
             
         worksheet = spreadsheet.worksheet(worksheet_name)

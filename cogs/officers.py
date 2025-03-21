@@ -135,17 +135,18 @@ class Officers(commands.Cog):
             if not replied_message.attachments:
                 raise commands.CommandError("Proof image required - attach at least one image")
             
-            required_fields = ["Event:", "Hosted by:", "Attendees:", "Proof:", "EP for event:"]
-            if missing := [f for f in required_fields if f not in content]:
-                raise commands.CommandError(f"Missing fields: {', '.join(missing)}")
-            
             is_company_event = any(
                 kw in ctx.channel.name for kw in ["hound-event-logs", "riot-event-logs", "shock-event-logs"]
             )
 
             point_type = "CEP" if is_company_event else "EP"
-            ep_pattern = r"CEP for event:\s*(\d+)" if is_company_event else r"EP for event:\s*(\d+)"
-            ep_match = re.search(ep_pattern, content)
+            ep_field = f"{point_type} for event:"
+            required_fields = ["Event:", "Hosted by:", "Attendees:", "Proof:", ep_field]
+            if missing := [f for f in required_fields if f not in content]:
+                raise commands.CommandError(f"Missing fields: {', '.join(missing)}")
+            
+            ep_pattern = rf"{point_type} for event:\s*(\d+)|{point_type} for Event:\s*(\d+)"
+            ep_match = re.search(ep_pattern, content, re.IGNORECASE)
 
             if not ep_match or (ep_value := int(ep_match.group(1))) > 5:
                 raise commands.CommandError(f"Invalid {point_type} value (max 5)")
@@ -168,6 +169,26 @@ class Officers(commands.Cog):
                     host_name = format_username(member)
                 else:
                     host_name = host_content.split("|")[1].strip() if "|" in host_content else host_content
+
+            supervisor_match = re.search(r"Supervisor:\s*(.+)", content)
+            supervisor_name = None
+            if supervisor_match:
+                supervisor_content = supervisor_match.group(1)
+                if supervisor_mention := re.search(r"<@!?(\d+)>", supervisor_content):
+                    member = await ctx.guild.fetch_member(int(supervisor_mention.group(1)))
+                    supervisor_name = format_username(member)
+                else:
+                    supervisor_name = supervisor_content.split("|")[1].strip() if "|" in supervisor_content else supervisor_content
+
+            cohost_match = re.search(r"Co-host:\s*(.+)", content)
+            cohost_name = None
+            if cohost_match:
+                cohost_content = cohost_match.group(1)
+                if cohost_mention := re.search(r"<@!?(\d+)>", cohost_content):
+                    member = await ctx.guild.fetch_member(int(cohost_mention.group(1)))
+                    cohost_name = format_username(member)
+                else:
+                    cohost_name = cohost_content.split("|")[1].strip() if "|" in cohost_content else cohost_content
 
             attendees_match = re.search(r"Attendees:\s*(.*)", content)
             if not attendees_match:
@@ -247,6 +268,28 @@ class Officers(commands.Cog):
                         "is_add": True
                     })
 
+            if supervisor_name:
+                supervisor_sheet = find_user_sheet(supervisor_name) or "Main"
+                updates.append({
+                    "sheet": supervisor_sheet,
+                    "worksheet_name": "Officer Sheet" if supervisor_sheet == "Officer" else "Main Sheet",
+                    "username": supervisor_name,
+                    "header": "Supervisor",
+                    "amount": ep_value,
+                    "is_add": True
+                })
+
+            if cohost_name:
+                cohost_sheet = find_user_sheet(cohost_name) or "Main"
+                updates.append({
+                    "sheet": cohost_sheet,
+                    "worksheet_name": "Officer Sheet" if cohost_sheet == "Officer" else "Main Sheet",
+                    "username": cohost_name,
+                    "header": "Co-host",
+                    "amount": ep_value,
+                    "is_add": True
+                })
+
             for username, points in extra_points:
                 user_sheet = find_user_sheet(username) or "Main"
                 if user_sheet == "Officer":
@@ -276,6 +319,8 @@ class Officers(commands.Cog):
                 title="Event Logged!",
                 description=(
                     f"**Host:** {host_name if host_name else 'N/A'}\n"
+                    f"**Supervisor:** {supervisor_name if supervisor_name else 'N/A'}\n"
+                    f"**Co-host:** {cohost_name if cohost_name else 'N/A'}\n"
                     f"**{point_type} Value:** {ep_value}\n"
                     f"**Attendees ({len(raw_attendees)}):**\n{attendee_list}\n"
                     f"**Linked Message:** [Jump to Message]({replied_message.jump_url})\n"
@@ -297,6 +342,8 @@ class Officers(commands.Cog):
                     title=f"{'Company ' if is_company_event else ''}Event Archive: {event_type}",
                     description=(
                         f"**Host:** {host_name if host_name else 'N/A'}\n"
+                        f"**Supervisor:** {supervisor_name if supervisor_name else 'N/A'}\n"
+                        f"**Co-host:** {cohost_name if cohost_name else 'N/A'}\n"
                         f"**{point_type} Awarded:** {ep_value}\n"
                         f"**Attendees ({len(raw_attendees)}):**\n{attendee_list}\n"
                         f"**Channel:** {ctx.channel.mention}\n"
@@ -322,10 +369,14 @@ class Officers(commands.Cog):
                 guild=ctx.guild,
                 Parameters=(
                     f"{point_type}: {ep_value} | Host: {host_name if host_name else 'N/A'} | "
+                    f"Supervisor: {supervisor_name if supervisor_name else 'N/A'} | "
+                    f"Co-host: {cohost_name if cohost_name else 'N/A'} | "
                     f"Attendees: {len(raw_attendees)} | Event ID: {event_id}"
                 ),
                 EP_Value=ep_value,
                 Host=host_name,
+                Supervisor=supervisor_name,
+                Co_host=cohost_name,
                 Attendees=len(raw_attendees)
             )
         except Exception as e:
@@ -335,6 +386,8 @@ class Officers(commands.Cog):
                 description=f"Error: {str(e)}\n\n**Required format example:**\n"
                             "```Event: Weekly Meetup\n"
                             "Hosted by: @[XO] | Caxseii | BRT\n"
+                            "Supervisor: @[XO] | SupervisorName\n"
+                            "Co-host: @[XO] | CoHostName\n"
                             "Attendees: @[XO] | Caxseii | BRT\n"
                             "Notes: Regular weekly meeting\n"
                             "Proof: attached-image.jpg\n"
@@ -460,6 +513,18 @@ class Officers(commands.Cog):
             await member.add_roles(*roles, reason="Assigned starter roles")
             print(f"Assigned roles to {member.name}: {[role.name for role in roles]}")
             add_new_user("Main", roblox_username)
+
+            from config import STARTER_CHANNELS, WELCOME_CHANNEL
+            for channel_id in STARTER_CHANNELS:
+                channel = ctx.guild.get_channel(channel_id)
+                if channel:
+                    ping_msg = await channel.send(f"{member.mention}")
+                    await ping_msg.delete(delay=0.2)
+
+            welcome_channel = ctx.guild.get_channel(WELCOME_CHANNEL)
+            if welcome_channel:
+                await welcome_channel.send(f"Attention Shock Troopers! Welcome our new shiny {member.mention} to the company!")
+
             embed = make_embed(
                 type="Success",
                 title="User Setup Complete",
@@ -498,6 +563,7 @@ class Officers(commands.Cog):
             return
 
         self.bot.loop.create_task(delete_messages_after_delay(self.bot, [ctx.message, replied_message, success_msg], 5))
+
 class EP(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
