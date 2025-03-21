@@ -1,6 +1,9 @@
 import discord
 from discord.ext import commands
+import re
+from config import ACTIVITY_CHANNEL, EVENT_LOG_CHANNELS
 from utils.embed_utils import make_embed
+import asyncio
 
 class Events(commands.Cog):
     def __init__(self, bot):
@@ -31,6 +34,54 @@ class Events(commands.Cog):
         channel = discord.utils.get(member.guild.text_channels, name="general")
         if channel:
             await channel.send(f"Welcome, {member.mention}!")
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if message.author.bot or message.content.startswith("-"):
+            return
+
+        if message.channel.id in [ACTIVITY_CHANNEL] + EVENT_LOG_CHANNELS:
+            if message.channel.id == ACTIVITY_CHANNEL:
+                required_fields = ["Username:", "Time Started:", "Time Ended:", "Time logged:", "Total time logged:", "Proof:"]
+                if any(f not in message.content for f in required_fields) or len(message.attachments) < 2:
+                    warning_msg = await message.channel.send(
+                        f"{message.author.mention}, the format of your message is incorrect. Please use the following format:\n"
+                        "```Username: @User\n"
+                        "Time Started: 6:17pm EST\n"
+                        "Time Ended: 7:42pm EST\n"
+                        "Time logged: 85\n"
+                        "Total time logged: 85\n"
+                        "Proof: attached-image1.jpg, attached-image2.jpg```"
+                    )
+                    await asyncio.sleep(20)
+                    await message.delete()
+                    await warning_msg.delete()
+            else:
+                is_company_event = any(
+                    kw in message.channel.name for kw in ["hound-event-logs", "riot-event-logs", "shock-event-logs"]
+                )
+
+                point_type = "CEP" if is_company_event else "EP"
+                ep_field = f"{point_type} for event:"
+                required_fields = ["Event:", "Hosted by:", "Attendees:", "Proof:", ep_field]
+
+                if any(f not in message.content for f in required_fields):
+                    warning_msg = await message.channel.send(
+                        f"{message.author.mention}, the format of your message is incorrect. Please use the following format:\n"
+                        "```Event: Weekly Meetup\n"
+                        "Hosted by: @[XO] | Caxseii | BRT\n"
+                        "Supervisor: @[XO] | SupervisorName\n"
+                        "Co-host: @[XO] | CoHostName\n"
+                        "Attendees: @[XO] | Caxseii | BRT\n"
+                        "Notes: Regular weekly meeting\n"
+                        "Proof: attached-image.jpg\n"
+                        f"{point_type} for event: 2\n"
+                        "Extra points: @Mention (2)\n"
+                        "Ping: @EventManager```"
+                    )
+                    await asyncio.sleep(20)
+                    await message.delete()
+                    await warning_msg.delete()
 
 async def setup(bot):
     await bot.add_cog(Events(bot))
