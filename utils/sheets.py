@@ -6,7 +6,7 @@ from functools import lru_cache
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 CREDS = Credentials.from_service_account_file("creds.json", scopes=SCOPES)
-MAIN_SHEET_HEADER_ROWS = [16, 46, 91, 165] 
+MAIN_SHEET_HEADER_ROWS = [16, 46, 93, 171] 
 
 def retry_with_backoff(func):
     def wrapper(*args, **kwargs):
@@ -110,18 +110,16 @@ def add_new_user(sheetName, username):
 @retry_with_backoff
 @lru_cache(maxsize=128)
 def get_column_index(worksheet, user_row, header_name):
-    """Find column index for a header in the nearest header row above the user's row."""
-    try:
-        header_row = max([hr for hr in MAIN_SHEET_HEADER_ROWS if hr <= user_row])
-        
-        headers = worksheet.row_values(header_row)
-        return headers.index(header_name) + 1
-    except (ValueError, KeyError):
-        print(f"Header '{header_name}' not found in row {header_row}")
-        return None
-    except Exception as e:
-        print(f"Error finding column: {e}")
-        return None
+    """
+    Search from the given row upward for the header row containing header_name.
+    Returns the column index (1-indexed) of header_name, or None if not found.
+    """
+    for header_row in range(user_row, 0, -1):
+        row_values = worksheet.row_values(header_row)
+        if header_name in row_values:
+            return row_values.index(header_name) + 1
+    print(f"Header '{header_name}' not found above row {user_row}")
+    return None
 
 @retry_with_backoff
 @lru_cache(maxsize=128)
